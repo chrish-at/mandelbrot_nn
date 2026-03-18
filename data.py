@@ -162,6 +162,7 @@ def build_boundary_biased_dataset(
     max_iter: int = DEFAULT_MAX_ITER,
     band=(0.35, 0.95),
     seed: int = 0,
+    pool_chunk_size: int = 10_000_000,
 ):
     rng = np.random.default_rng(seed)
     ylim = compute_ylim(xlim, resolution, ycenter=ycenter)
@@ -172,12 +173,24 @@ def build_boundary_biased_dataset(
     Xu = sample_uniform(n_uniform, xlim, ylim, rng)
 
     pool_factor = 20
-    pool = sample_uniform(n_boundary * pool_factor, xlim, ylim, rng)
-    yp = smooth_escape_batch(pool, max_iter=max_iter)
+    n_pool_total = n_boundary * pool_factor
 
-    mask = (yp > band[0]) & (yp < band[1])
-    Xb = pool[mask]
-    yb = yp[mask]
+    Xb_parts, yb_parts = [], []
+    collected = 0
+    for start in range(0, n_pool_total, pool_chunk_size):
+        chunk_n = min(pool_chunk_size, n_pool_total - start)
+        pool = sample_uniform(chunk_n, xlim, ylim, rng)
+        yp = smooth_escape_batch(pool, max_iter=max_iter)
+        mask = (yp > band[0]) & (yp < band[1])
+        Xb_parts.append(pool[mask])
+        yb_parts.append(yp[mask])
+        collected += mask.sum()
+        if collected >= n_boundary:
+            break
+        print(f"    boundary pool chunk: {collected:,}/{n_boundary:,} collected")
+
+    Xb = np.concatenate(Xb_parts, axis=0)
+    yb = np.concatenate(yb_parts, axis=0)
 
     if len(Xb) < n_boundary:
         keep = min(len(Xb), n_boundary)
@@ -244,10 +257,14 @@ def get_or_build_dataset(cache_path: str = None, target: str = "smooth", **kwarg
     return X, y, ylim
 
 
+def _master_smooth_path(n_total: int) -> str:
+    return f"data/master_{n_total // 1_000_000}M.npz"
+
+
 def get_or_build_master(cache_path: str = None,
                         n_total: int = 2_000_000, target: str = "smooth", **kwargs):
-    """Build or load the 2M-point master dataset used for scaling experiments."""
-    smooth_path = "data/master_2M.npz"
+    """Build or load a master dataset used for scaling experiments."""
+    smooth_path = _master_smooth_path(n_total)
     if cache_path is None:
         cache_path = _cache_path(smooth_path, target)
     cache = Path(cache_path)
