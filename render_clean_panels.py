@@ -37,7 +37,7 @@ MODEL_CONFIGS = [
 
 VIEWS = {
     "seahorse": {
-        "xlim": (-0.82, -0.7),
+        "xlim": (-0.83, -0.69),
         "ylim": (0.08, 0.22),
     },
     "minibrot": {
@@ -46,7 +46,7 @@ VIEWS = {
     },
 }
 
-PANEL_RES = (960, 540)
+PANEL_RES = (720, 720)
 FULL_RES = (1920, 1080)
 DEFAULT_SIGMAS = (2.0, 6.0, 10.0)
 
