@@ -1,0 +1,17 @@
+[
+  {
+    "tag": "fourier_h1024_b20_n1000000",
+    "model_type": "fourier",
+    "hidden_dim": 1024,
+    "num_blocks": 20,
+    "n_params": 44167169,
+    "n_data": 1000000,
+    "epochs": 100,
+    "target": "discrete",
+    "axis": "model",
+    "train_loss_final": 0.0005390969222874252,
+    "test_mse": 0.003217619378119707,
+    "flops": 2.65003014e+16,
+    "wall_time_s": 3014.6491560935974
+  }
+]

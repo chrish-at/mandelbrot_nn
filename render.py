@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from data import smooth_escape_grid, discrete_escape_grid, compute_ylim
-from models import MLPRes, MLPFourierRes, MLPGatedRes, MLPFourierGatedRes
+from train import _NAMED_EXPERIMENTS, make_model
 
 OUTPUT = Path("output")
 CKPT = Path("checkpoints")
@@ -37,57 +37,13 @@ VIEWS = {
     },
 }
 
-_GATED_DEFAULTS = dict(hidden_dim=512, num_blocks=20)
-_BILINEAR_DEEP_DEFAULTS = dict(
-    hidden_dim=128, num_blocks=100, gate_type="bilinear",
-    weight_tie=True, use_layernorm=False, in_act="none",
-)
 
-
-def _parse_model_key(key):
-    """Parse a model key like 'gated_bilinear_tied' into constructor args."""
-    if key == "bilinear_deep":
-        return "bilinear_deep", {}, key
-    parts = key.split("_")
-    base = parts[0]
-    if base == "fourier" and len(parts) > 1 and parts[1] == "gated":
-        base = "fourier_gated"
-        parts = parts[2:]
-    elif base == "gated":
-        parts = parts[1:]
-    else:
-        return base, {}, key
-
-    gate_type = parts[0] if parts else "bilinear"
-    weight_tie = "tied" in parts
-    return base, dict(gate_type=gate_type, weight_tie=weight_tie), key
-
-
-def load_model(key, target="smooth"):
-    base, kwargs, _ = _parse_model_key(key)
-    if base == "baseline":
-        m = MLPRes(hidden_dim=512, num_blocks=20, act="silu")
-    elif base == "fourier":
-        m = MLPFourierRes(
-            num_feats=512, sigmas=(2.0, 6.0, 10.0),
-            hidden_dim=512, num_blocks=20, act="silu", seed=0,
-        )
-    elif base == "gated":
-        m = MLPGatedRes(**kwargs, **_GATED_DEFAULTS)
-    elif base == "fourier_gated":
-        m = MLPFourierGatedRes(
-            num_feats=512, sigmas=(2.0, 6.0, 10.0), seed=0,
-            **kwargs, **_GATED_DEFAULTS,
-        )
-    elif base == "bilinear_deep":
-        m = MLPGatedRes(**_BILINEAR_DEEP_DEFAULTS)
-    else:
-        raise ValueError(f"Unknown model key: {key}")
-
+def load_model(key, target="smooth", ckpt_suffix=""):
+    m = make_model(key, DEVICE)
     stem = key
     if target == "discrete":
         stem += "_discrete"
-    path = CKPT / f"{stem}.pt"
+    path = CKPT / f"{stem}{ckpt_suffix}.pt"
     m.load_state_dict(torch.load(path, map_location=DEVICE, weights_only=True))
     m.to(DEVICE).eval()
     return m
@@ -125,7 +81,8 @@ def make_grid(view):
     return xs, ys
 
 
-def render_comparison(view_name, view, models, gt_cache, target="smooth"):
+def render_comparison(view_name, view, models, gt_cache, target="smooth",
+                      display_names=None):
     xs, ys = make_grid(view)
     names = list(models.keys())
     n = len(names)
@@ -154,7 +111,8 @@ def render_comparison(view_name, view, models, gt_cache, target="smooth"):
     fig, axes = plt.subplots(1, ncols, figsize=(8 * ncols, 7))
     if ncols == 1:
         axes = [axes]
-    panels = [("Ground Truth", gt)] + [(name, preds[name]) for name in names]
+    _dn = display_names or {}
+    panels = [("Ground Truth", gt)] + [(_dn.get(name, name), preds[name]) for name in names]
     for ax, (title, img) in zip(axes, panels):
         ax.imshow(img, extent=extent, cmap=cmap,
                   vmin=0, vmax=1, aspect="auto")
@@ -168,18 +126,22 @@ def render_comparison(view_name, view, models, gt_cache, target="smooth"):
                 dpi=150, bbox_inches="tight")
     plt.close(fig)
 
+    errors = {name: np.abs(preds[name] - gt) for name in names}
+    shared_vmax = max(0.05, float(max(
+        np.percentile(err, 99.5) for err in errors.values())))
+
     fig, axes = plt.subplots(1, n, figsize=(9 * n, 7))
     if n == 1:
         axes = [axes]
     for ax, name in zip(axes, names):
-        err = np.abs(preds[name] - gt)
-        vmax = max(0.05, float(np.percentile(err, 99.5)))
+        err = errors[name]
         im = ax.imshow(err, extent=extent, cmap="hot",
-                       vmin=0, vmax=vmax, aspect="auto")
+                       vmin=0, vmax=shared_vmax, aspect="auto")
         mean_err = float(err.mean())
         max_err = float(err.max())
+        disp = _dn.get(name, name)
         ax.set_title(
-            f"|Error|  {name}  (mean={mean_err:.4f}, max={max_err:.4f})",
+            f"|Error|  {disp}  (mean={mean_err:.4f}, max={max_err:.4f})",
             fontsize=13,
         )
         ax.set_xlabel("Re(c)")
@@ -197,26 +159,38 @@ def render_comparison(view_name, view, models, gt_cache, target="smooth"):
 _COLORS = ["#e74c3c", "#2ecc71", "#3498db", "#9b59b6", "#f39c12", "#1abc9c"]
 
 
-def render_loss_curves(model_keys, target="smooth"):
+def render_loss_curves(model_keys, models=None, target="smooth",
+                       display_names=None, ckpt_suffix="",
+                       output_suffix=""):
     suffix = f"_{target}" if target == "discrete" else ""
+    suffix += output_suffix
     fig, ax = plt.subplots(figsize=(10, 6))
+
     for name, color in zip(model_keys, _COLORS):
         stem = name
         if target == "discrete":
             stem += "_discrete"
-        path = CKPT / f"{stem}_loss.json"
+        path = CKPT / f"{stem}{ckpt_suffix}_loss.json"
         if not path.exists():
             continue
         with open(path) as f:
-            hist = json.load(f)
-        ax.plot(range(1, len(hist) + 1), hist, label=name,
-                color=color, linewidth=2)
+            raw = json.load(f)
+        train_hist = raw["train"] if isinstance(raw, dict) else raw
+        test_hist = raw.get("test") if isinstance(raw, dict) else None
+        label = display_names.get(name, name) if display_names else name
+        epochs = range(1, len(train_hist) + 1)
+        ax.plot(epochs, train_hist, color=color, linewidth=2,
+                label=f"{label} train")
+        if test_hist:
+            ax.plot(range(1, len(test_hist) + 1), test_hist, color=color,
+                    linewidth=1.5, linestyle="--", label=f"{label} test")
+
     loss_label = "BCE Loss" if target == "discrete" else "MSE Loss"
     ax.set_xlabel("Epoch", fontsize=13)
     ax.set_ylabel(loss_label, fontsize=13)
     target_label = target.capitalize()
     ax.set_title(f"Training Loss ({target_label})", fontsize=15)
-    ax.legend(fontsize=12)
+    ax.legend(fontsize=10)
     ax.set_yscale("log")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -241,34 +215,54 @@ def _discover_model_keys(target="smooth"):
     return keys
 
 
+DISPLAY_NAMES = {
+    "swiglu_untied": "swiglu",
+    "fourier_swiglu_untied": "fourier_swiglu",
+    "fourier_hf": "fourier",
+    "fourier_swiglu_untied_hf": "fourier_swiglu",
+}
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", default="smooth",
                         choices=["smooth", "discrete"])
     parser.add_argument("--models", nargs="+", default=None,
-                        help="Model keys to render (auto-discovers if omitted)")
+                        help="Model keys for comparison images (auto-discovers if omitted)")
+    parser.add_argument("--loss_models", nargs="+", default=None,
+                        help="Model keys for loss curves (defaults to --models)")
+    parser.add_argument("--ckpt_suffix", default="",
+                        help="Suffix appended to checkpoint stems (e.g. '_strat')")
     args = parser.parse_args()
 
     OUTPUT.mkdir(parents=True, exist_ok=True)
 
-    model_keys = args.models or _discover_model_keys(target=args.target)
-    print(f"Loading models (target={args.target}): {model_keys}")
+    comp_keys = args.models or _discover_model_keys(target=args.target)
+    loss_keys = args.loss_models or comp_keys
+
+    all_keys = list(dict.fromkeys(comp_keys + loss_keys))
+    print(f"Loading models (target={args.target}, suffix={args.ckpt_suffix!r}): {all_keys}")
     models = {}
-    for key in model_keys:
+    for key in all_keys:
         try:
-            models[key] = load_model(key, target=args.target)
+            models[key] = load_model(key, target=args.target,
+                                     ckpt_suffix=args.ckpt_suffix)
         except FileNotFoundError:
             print(f"  [skip] No checkpoint for {key}")
 
+    comp_models = {k: models[k] for k in comp_keys if k in models}
     gt_cache = {}
     for view_name, view in VIEWS.items():
         print(f"\nRendering {view_name} ...")
-        gt_cache = render_comparison(view_name, view, models, gt_cache,
-                                     target=args.target)
+        gt_cache = render_comparison(view_name, view, comp_models, gt_cache,
+                                     target=args.target,
+                                     display_names=DISPLAY_NAMES)
 
     print("\nRendering loss curves ...")
-    render_loss_curves(list(models.keys()), target=args.target)
+    render_loss_curves(loss_keys, models, target=args.target,
+                       display_names=DISPLAY_NAMES,
+                       ckpt_suffix=args.ckpt_suffix)
 
     print(f"\nAll plots saved to {OUTPUT.resolve()}")
 

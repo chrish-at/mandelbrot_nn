@@ -1,0 +1,15 @@
+[
+  {
+    "tag": "baseline_h64_b4_n5000",
+    "model_type": "baseline",
+    "hidden_dim": 64,
+    "num_blocks": 4,
+    "n_params": 34689,
+    "n_data": 5000,
+    "epochs": 3,
+    "train_loss_final": 0.1789325624704361,
+    "test_mse": 0.1444452852010727,
+    "flops": 3122010000.0,
+    "wall_time_s": 0.39855027198791504
+  }
+]

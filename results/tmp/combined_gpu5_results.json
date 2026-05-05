@@ -1,0 +1,62 @@
+[
+  {
+    "tag": "fourier_h512_b20_n1000000",
+    "model_type": "fourier",
+    "hidden_dim": 512,
+    "num_blocks": 20,
+    "n_params": 11073537,
+    "n_data": 1000000,
+    "epochs": 100,
+    "target": "smooth",
+    "axis": "model",
+    "train_loss_final": 0.0005741886673857778,
+    "test_mse": 0.0002579682331997901,
+    "flops": 6644122200000000.0,
+    "wall_time_s": 1677.2074353694916
+  },
+  {
+    "tag": "fourier_h512_b20_n500000",
+    "model_type": "fourier",
+    "hidden_dim": 512,
+    "num_blocks": 20,
+    "n_params": 11073537,
+    "n_data": 500000,
+    "epochs": 100,
+    "target": "discrete",
+    "axis": "data",
+    "train_loss_final": 0.000823609545298749,
+    "test_mse": 0.004778374917805195,
+    "flops": 3322061100000000.0,
+    "wall_time_s": 827.0445430278778
+  },
+  {
+    "tag": "fourier_h512_b20_n100000",
+    "model_type": "fourier",
+    "hidden_dim": 512,
+    "num_blocks": 20,
+    "n_params": 11073537,
+    "n_data": 100000,
+    "epochs": 100,
+    "target": "discrete",
+    "axis": "data",
+    "train_loss_final": 0.000530359655385837,
+    "test_mse": 0.010331293568015099,
+    "flops": 664412220000000.0,
+    "wall_time_s": 160.98374271392822
+  },
+  {
+    "tag": "fourier_h512_b20_n50000",
+    "model_type": "fourier",
+    "hidden_dim": 512,
+    "num_blocks": 20,
+    "n_params": 11073537,
+    "n_data": 50000,
+    "epochs": 100,
+    "target": "discrete",
+    "axis": "data",
+    "train_loss_final": 0.0008472375484416261,
+    "test_mse": 0.015286910347640514,
+    "flops": 332206110000000.0,
+    "wall_time_s": 80.65841698646545
+  }
+]

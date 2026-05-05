@@ -1,0 +1,104 @@
+{
+  "full": "full_mandelbrot.png",
+  "views": {
+    "seahorse": {
+      "xlim": [
+        -0.83,
+        -0.69
+      ],
+      "ylim": [
+        0.08,
+        0.22
+      ],
+      "panels": [
+        {
+          "label": "Ground Truth",
+          "file": "seahorse_gt.png",
+          "params": null
+        },
+        {
+          "label": "P = 6.7K",
+          "file": "seahorse_p6657.png",
+          "params": 6657
+        },
+        {
+          "label": "P = 19.5K",
+          "file": "seahorse_p19489.png",
+          "params": 19489
+        },
+        {
+          "label": "P = 42.8K",
+          "file": "seahorse_p42753.png",
+          "params": 42753
+        },
+        {
+          "label": "P = 132.9K",
+          "file": "seahorse_p132865.png",
+          "params": 132865
+        },
+        {
+          "label": "P = 301.6K",
+          "file": "seahorse_p301569.png",
+          "params": 301569
+        },
+        {
+          "label": "P = 823.3K",
+          "file": "seahorse_p823297.png",
+          "params": 823297
+        }
+      ]
+    },
+    "minibrot": {
+      "xlim": [
+        -1.82,
+        -1.72
+      ],
+      "ylim": [
+        -0.05,
+        0.05
+      ],
+      "panels": [
+        {
+          "label": "Ground Truth",
+          "file": "minibrot_gt.png",
+          "params": null
+        },
+        {
+          "label": "P = 6.7K",
+          "file": "minibrot_p6657.png",
+          "params": 6657
+        },
+        {
+          "label": "P = 19.5K",
+          "file": "minibrot_p19489.png",
+          "params": 19489
+        },
+        {
+          "label": "P = 42.8K",
+          "file": "minibrot_p42753.png",
+          "params": 42753
+        },
+        {
+          "label": "P = 132.9K",
+          "file": "minibrot_p132865.png",
+          "params": 132865
+        },
+        {
+          "label": "P = 301.6K",
+          "file": "minibrot_p301569.png",
+          "params": 301569
+        },
+        {
+          "label": "P = 823.3K",
+          "file": "minibrot_p823297.png",
+          "params": 823297
+        }
+      ]
+    }
+  },
+  "sigmas": [
+    2.0,
+    6.0,
+    10.0
+  ]
+}

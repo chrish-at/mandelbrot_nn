@@ -6,10 +6,21 @@ Models:
   - MLPFourierRes:    Same backbone but preceded by multi-scale Gaussian Fourier features.
   - MLPGatedRes:      Residual MLP with configurable gated blocks (bilinear, swiglu, etc.)
   - MLPFourierGatedRes: Fourier features + gated residual backbone.
+  - HybridGatedRes:   Tied gated iteration blocks + untied SiLU readout head.
 """
 
 import torch
 import torch.nn as nn
+
+
+def _make_norm(norm_type: str, dim: int):
+    if norm_type == "layernorm":
+        return nn.LayerNorm(dim)
+    elif norm_type == "rmsnorm":
+        return nn.RMSNorm(dim)
+    elif norm_type == "none":
+        return nn.Identity()
+    raise ValueError(f"Unknown norm_type: {norm_type}")
 
 
 class ResidualBlock(nn.Module):
@@ -58,6 +69,7 @@ _GATE_ACTIVATIONS = {
     "swiglu": nn.SiLU,
     "reglu": nn.ReLU,
     "geglu": nn.GELU,
+    "glu": nn.Sigmoid,
 }
 
 
@@ -70,12 +82,12 @@ class GatedResidualBlock(nn.Module):
 
     def __init__(self, dim: int, inner_dim: int | None = None,
                  gate_type: str = "bilinear", dropout: float = 0.0,
-                 use_layernorm: bool = True):
+                 norm_type: str = "layernorm"):
         super().__init__()
         if inner_dim is None:
-            inner_dim = (dim * 2 // 3 + 7) & ~7  # round up to multiple of 8
+            inner_dim = (dim * 2 // 3 + 7) & ~7
         act_cls = _GATE_ACTIVATIONS[gate_type]
-        self.ln = nn.LayerNorm(dim) if use_layernorm else nn.Identity()
+        self.ln = _make_norm(norm_type, dim)
         self.fc_gate = nn.Linear(dim, inner_dim)
         self.fc_value = nn.Linear(dim, inner_dim)
         self.gate_act = act_cls()
@@ -99,13 +111,13 @@ class MLPGatedRes(nn.Module):
         weight_tie: If True, a single GatedResidualBlock is reused for all
             iterations (unrolled RNN), matching the repeated-function structure
             of the Mandelbrot iteration.
-        use_layernorm: If False, removes all LayerNorm (blocks + output).
+        norm_type: "layernorm", "rmsnorm", or "none".
         in_act: Input activation — "silu" or "none".
     """
 
     def __init__(self, hidden_dim=512, num_blocks=20, gate_type="bilinear",
                  inner_dim=None, weight_tie=False, dropout=0.0, out_dim=1,
-                 use_layernorm=True, in_act="silu"):
+                 norm_type="layernorm", in_act="silu"):
         super().__init__()
         self.in_proj = nn.Linear(2, hidden_dim)
         self.in_act = nn.SiLU() if in_act == "silu" else nn.Identity()
@@ -115,16 +127,16 @@ class MLPGatedRes(nn.Module):
             self.block = GatedResidualBlock(
                 hidden_dim, inner_dim=inner_dim,
                 gate_type=gate_type, dropout=dropout,
-                use_layernorm=use_layernorm,
+                norm_type=norm_type,
             )
         else:
             self.blocks = nn.Sequential(
                 *[GatedResidualBlock(hidden_dim, inner_dim=inner_dim,
                                      gate_type=gate_type, dropout=dropout,
-                                     use_layernorm=use_layernorm)
+                                     norm_type=norm_type)
                   for _ in range(num_blocks)]
             )
-        self.out_ln = nn.LayerNorm(hidden_dim) if use_layernorm else nn.Identity()
+        self.out_ln = _make_norm(norm_type, hidden_dim)
         self.out_act = nn.SiLU() if in_act == "silu" else nn.Identity()
         self.out_proj = nn.Linear(hidden_dim, out_dim)
 
@@ -145,7 +157,7 @@ class MLPFourierGatedRes(nn.Module):
     def __init__(self, num_feats=512, sigmas=(2.0, 6.0, 10.0),
                  hidden_dim=512, num_blocks=20, gate_type="bilinear",
                  inner_dim=None, weight_tie=False, dropout=0.0,
-                 out_dim=1, seed=0):
+                 out_dim=1, seed=0, norm_type="layernorm"):
         super().__init__()
         self.ff = MultiScaleGaussianFourierFeatures(
             2, num_feats=num_feats, sigmas=sigmas, seed=seed,
@@ -158,14 +170,16 @@ class MLPFourierGatedRes(nn.Module):
             self.block = GatedResidualBlock(
                 hidden_dim, inner_dim=inner_dim,
                 gate_type=gate_type, dropout=dropout,
+                norm_type=norm_type,
             )
         else:
             self.blocks = nn.Sequential(
                 *[GatedResidualBlock(hidden_dim, inner_dim=inner_dim,
-                                     gate_type=gate_type, dropout=dropout)
+                                     gate_type=gate_type, dropout=dropout,
+                                     norm_type=norm_type)
                   for _ in range(num_blocks)]
             )
-        self.out_ln = nn.LayerNorm(hidden_dim)
+        self.out_ln = _make_norm(norm_type, hidden_dim)
         self.out_act = nn.SiLU()
         self.out_proj = nn.Linear(hidden_dim, out_dim)
 
@@ -177,6 +191,42 @@ class MLPFourierGatedRes(nn.Module):
                 x = self.block(x)
         else:
             x = self.blocks(x)
+        x = self.out_act(self.out_ln(x))
+        return self.out_proj(x)
+
+
+class HybridGatedRes(nn.Module):
+    """Tied gated iteration blocks followed by untied SiLU readout head.
+
+    Separates the repeated quadratic iteration (tied gated blocks) from
+    the escape-time readout (untied SiLU MLP blocks).
+    """
+
+    def __init__(self, hidden_dim=512, num_iter_blocks=20, num_head_blocks=4,
+                 gate_type="bilinear", inner_dim=None, dropout=0.0,
+                 out_dim=1, norm_type="layernorm"):
+        super().__init__()
+        self.in_proj = nn.Linear(2, hidden_dim)
+        self.in_act = nn.SiLU()
+        self.num_iters = num_iter_blocks
+        self.iter_block = GatedResidualBlock(
+            hidden_dim, inner_dim=inner_dim,
+            gate_type=gate_type, dropout=dropout,
+            norm_type=norm_type,
+        )
+        self.head_blocks = nn.Sequential(
+            *[ResidualBlock(hidden_dim, act="silu", dropout=dropout)
+              for _ in range(num_head_blocks)]
+        )
+        self.out_ln = _make_norm(norm_type, hidden_dim)
+        self.out_act = nn.SiLU()
+        self.out_proj = nn.Linear(hidden_dim, out_dim)
+
+    def forward(self, x):
+        x = self.in_act(self.in_proj(x))
+        for _ in range(self.num_iters):
+            x = self.iter_block(x)
+        x = self.head_blocks(x)
         x = self.out_act(self.out_ln(x))
         return self.out_proj(x)
 

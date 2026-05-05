@@ -1,0 +1,123 @@
+[
+  {
+    "tag": "fourier_h128_b8_n5000000",
+    "hidden_dim": 128,
+    "num_blocks": 8,
+    "n_params": 301569,
+    "n_data": 5000000,
+    "epochs": 20,
+    "train_loss": 0.002647247196778468,
+    "test_loss": 0.0026919678784906864,
+    "wall_time_s": 924.9842495918274
+  },
+  {
+    "tag": "fourier_h512_b20_n100000",
+    "hidden_dim": 512,
+    "num_blocks": 20,
+    "n_params": 11073537,
+    "n_data": 100000,
+    "epochs": 1041,
+    "train_loss": 1.781246893036344e-05,
+    "test_loss": 0.004504404496401548,
+    "wall_time_s": 1667.80228972435
+  },
+  {
+    "tag": "fourier_h192_b10_n500000",
+    "hidden_dim": 192,
+    "num_blocks": 10,
+    "n_params": 823297,
+    "n_data": 500000,
+    "epochs": 204,
+    "train_loss": 0.0012888029278790365,
+    "test_loss": 0.002743191085755825,
+    "wall_time_s": 1307.1544587612152
+  },
+  {
+    "tag": "fourier_h128_b8_n1000000",
+    "hidden_dim": 128,
+    "num_blocks": 8,
+    "n_params": 301569,
+    "n_data": 1000000,
+    "epochs": 102,
+    "train_loss": 0.002142060703605597,
+    "test_loss": 0.0024941207375377417,
+    "wall_time_s": 1292.1977920532227
+  },
+  {
+    "tag": "fourier_h128_b8_n500000",
+    "hidden_dim": 128,
+    "num_blocks": 8,
+    "n_params": 301569,
+    "n_data": 500000,
+    "epochs": 204,
+    "train_loss": 0.0018768040177061178,
+    "test_loss": 0.002696423791348934,
+    "wall_time_s": 1276.2338254451752
+  },
+  {
+    "tag": "fourier_h64_b4_n1000000",
+    "hidden_dim": 64,
+    "num_blocks": 4,
+    "n_params": 42753,
+    "n_data": 1000000,
+    "epochs": 102,
+    "train_loss": 0.0033302960867733983,
+    "test_loss": 0.0033944188617169857,
+    "wall_time_s": 1228.6326215267181
+  },
+  {
+    "tag": "fourier_h128_b8_n100000",
+    "hidden_dim": 128,
+    "num_blocks": 8,
+    "n_params": 301569,
+    "n_data": 100000,
+    "epochs": 1041,
+    "train_loss": 0.0002170341243375636,
+    "test_loss": 0.005694626830518246,
+    "wall_time_s": 1265.5333638191223
+  },
+  {
+    "tag": "fourier_h48_b3_n1000000",
+    "hidden_dim": 48,
+    "num_blocks": 3,
+    "n_params": 19489,
+    "n_data": 1000000,
+    "epochs": 102,
+    "train_loss": 0.003769456835456009,
+    "test_loss": 0.0038061814848333597,
+    "wall_time_s": 1202.7118558883667
+  },
+  {
+    "tag": "fourier_h48_b3_n500000",
+    "hidden_dim": 48,
+    "num_blocks": 3,
+    "n_params": 19489,
+    "n_data": 500000,
+    "epochs": 204,
+    "train_loss": 0.0037627021751565036,
+    "test_loss": 0.003857081988826394,
+    "wall_time_s": 1095.3797829151154
+  },
+  {
+    "tag": "fourier_h32_b2_n500000",
+    "hidden_dim": 32,
+    "num_blocks": 2,
+    "n_params": 6657,
+    "n_data": 500000,
+    "epochs": 204,
+    "train_loss": 0.004645834299048684,
+    "test_loss": 0.004689098335802555,
+    "wall_time_s": 1077.5533244609833
+  },
+  {
+    "tag": "fourier_h32_b2_n100000",
+    "hidden_dim": 32,
+    "num_blocks": 2,
+    "n_params": 6657,
+    "n_data": 100000,
+    "epochs": 1041,
+    "train_loss": 0.004475432603309552,
+    "test_loss": 0.004739085212349892,
+    "wall_time_s": 1061.9660880565643
+  }
+]

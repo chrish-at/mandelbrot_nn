@@ -1,0 +1,18 @@
+[
+  {
+    "tag": "fourier_h320_b14_n5000000",
+    "model_type": "fourier",
+    "hidden_dim": 320,
+    "num_blocks": 14,
+    "n_params": 3100161,
+    "n_data": 5000000,
+    "epochs": 20,
+    "target": "discrete",
+    "axis": "targeted",
+    "train_loss_final": 0.0027173553528092404,
+    "test_mse": 0.0020689975935965776,
+    "flops": 1860096600000000.0,
+    "wall_time_s": 1662.9235575199127,
+    "test_bce": 0.009213887155056
+  }
+]

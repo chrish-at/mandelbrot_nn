@@ -1,0 +1,90 @@
+[
+  {
+    "tag": "fourier_h320_b14_n500000",
+    "hidden_dim": 320,
+    "num_blocks": 14,
+    "n_params": 3100161,
+    "n_data": 500000,
+    "epochs": 204,
+    "train_loss": 0.0009827713017374828,
+    "test_loss": 0.002770497929304838,
+    "wall_time_s": 1426.4880559444427
+  },
+  {
+    "tag": "fourier_h192_b10_n1000000",
+    "hidden_dim": 192,
+    "num_blocks": 10,
+    "n_params": 823297,
+    "n_data": 1000000,
+    "epochs": 102,
+    "train_loss": 0.0017125413635722742,
+    "test_loss": 0.002326300134882331,
+    "wall_time_s": 1350.046758890152
+  },
+  {
+    "tag": "fourier_h96_b6_n5000000",
+    "hidden_dim": 96,
+    "num_blocks": 6,
+    "n_params": 132865,
+    "n_data": 5000000,
+    "epochs": 20,
+    "train_loss": 0.0031408119440055307,
+    "test_loss": 0.0031509187538176775,
+    "wall_time_s": 886.0003399848938
+  },
+  {
+    "tag": "fourier_h320_b14_n100000",
+    "hidden_dim": 320,
+    "num_blocks": 14,
+    "n_params": 3100161,
+    "n_data": 100000,
+    "epochs": 1041,
+    "train_loss": 1.7915827697834175e-05,
+    "test_loss": 0.004570978693664074,
+    "wall_time_s": 1384.168329000473
+  },
+  {
+    "tag": "fourier_h96_b6_n1000000",
+    "hidden_dim": 96,
+    "num_blocks": 6,
+    "n_params": 132865,
+    "n_data": 1000000,
+    "epochs": 102,
+    "train_loss": 0.002642696460930356,
+    "test_loss": 0.002816782332956791,
+    "wall_time_s": 1287.3314416408539
+  },
+  {
+    "tag": "fourier_h96_b6_n500000",
+    "hidden_dim": 96,
+    "num_blocks": 6,
+    "n_params": 132865,
+    "n_data": 500000,
+    "epochs": 204,
+    "train_loss": 0.0025234202449744354,
+    "test_loss": 0.0029098347295075655,
+    "wall_time_s": 1277.033433675766
+  },
+  {
+    "tag": "fourier_h64_b4_n500000",
+    "hidden_dim": 64,
+    "num_blocks": 4,
+    "n_params": 42753,
+    "n_data": 500000,
+    "epochs": 204,
+    "train_loss": 0.0033089118402787163,
+    "test_loss": 0.003459010971710086,
+    "wall_time_s": 1235.9873485565186
+  },
+  {
+    "tag": "fourier_h96_b6_n100000",
+    "hidden_dim": 96,
+    "num_blocks": 6,
+    "n_params": 132865,
+    "n_data": 100000,
+    "epochs": 1041,
+    "train_loss": 0.0012337630226587255,
+    "test_loss": 0.004776008427143097,
+    "wall_time_s": 1247.035707950592
+  }
+]

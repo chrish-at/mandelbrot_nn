@@ -12,10 +12,11 @@ Usage:
     python scaling.py --axis model --num-gpus 8          # model scaling only, 8 GPUs
     python scaling.py --target discrete --num-gpus 8     # discrete sweep, 8 GPUs
     python scaling.py --run-all --num-gpus 8             # all pending experiments at once
-    python scaling.py --run-targeted --num-gpus 8        # param scaling at N=5M, both targets
-    python scaling.py --run-isodata --num-gpus 8         # isodata param scaling at N=100K,500K,1M
-    python scaling.py --plot-only                        # regenerate smooth plots
-    python scaling.py --plot-only --target discrete      # regenerate discrete plots
+    python scaling.py --sweep --hf --num-gpus 8                         # full HF sweep
+    python scaling.py --sweep --hf --test-label _3070test --num-gpus 8  # with output label
+    python scaling.py --plot-only --hf --test-label _3070test           # regenerate plots
+    python scaling.py --run-targeted --num-gpus 8        # (legacy) param scaling at N=5M
+    python scaling.py --run-isodata --num-gpus 8         # (legacy) isodata at N=100K,500K,1M
 """
 
 import argparse
@@ -43,6 +44,9 @@ OUTPUT_DIR = Path("output")
 
 EVAL_RES = (960, 540)
 EVAL_XLIM = (-2.4, 1.0)
+
+DEFAULT_SIGMAS = (2.0, 6.0, 10.0)
+HF_SIGMAS = (2.0, 6.0, 10.0, 30.0, 100.0)
 
 DATA_SIZES = [1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 2_000_000]
 
@@ -91,6 +95,23 @@ ISODATA_MODEL_CONFIGS = [
 ISODATA_HIDDEN_DIMS = {mc["hidden_dim"] for mc in ISODATA_MODEL_CONFIGS}
 ISODATA_N_VALUES = [100_000, 500_000, 1_000_000]
 
+SWEEP_MODEL_CONFIGS = [
+    {"hidden_dim": 32,   "num_blocks": 2},
+    {"hidden_dim": 48,   "num_blocks": 3},
+    {"hidden_dim": 64,   "num_blocks": 4},
+    {"hidden_dim": 96,   "num_blocks": 6},
+    {"hidden_dim": 128,  "num_blocks": 8},
+    {"hidden_dim": 192,  "num_blocks": 10},
+    {"hidden_dim": 256,  "num_blocks": 12},
+    {"hidden_dim": 320,  "num_blocks": 14},
+    {"hidden_dim": 384,  "num_blocks": 16},
+    {"hidden_dim": 512,  "num_blocks": 20},
+]
+SWEEP_N_VALUES = [100_000, 500_000, 1_000_000, 5_000_000]
+SWEEP_HIDDEN_DIMS = {mc["hidden_dim"] for mc in SWEEP_MODEL_CONFIGS}
+
+SCALING_CKPT_DIR = Path("checkpoints/scaling")
+
 
 # ---------------------------------------------------------------------------
 # Paths and caching
@@ -102,10 +123,11 @@ def _eval_grid_cache_path(target):
     return Path("data/eval_grid.npz")
 
 
-def _results_path(target):
+def _results_path(target, hf=False, test_label=""):
+    hf_tag = "_hf" if hf else ""
     if target == "discrete":
-        return RESULTS_DIR / "scaling_results_discrete.json"
-    return RESULTS_DIR / "scaling_results.json"
+        return RESULTS_DIR / f"scaling_results_discrete{hf_tag}{test_label}.json"
+    return RESULTS_DIR / f"scaling_results{hf_tag}{test_label}.json"
 
 
 def get_eval_grid(target="smooth"):
@@ -128,12 +150,13 @@ def get_eval_grid(target="smooth"):
 # Model construction and evaluation
 # ---------------------------------------------------------------------------
 
-def make_model(model_type, hidden_dim, num_blocks, device):
+def make_model(model_type, hidden_dim, num_blocks, device,
+               sigmas=DEFAULT_SIGMAS):
     if model_type == "baseline":
         m = MLPRes(hidden_dim=hidden_dim, num_blocks=num_blocks, act="silu")
     else:
         m = MLPFourierRes(
-            num_feats=hidden_dim, sigmas=(2.0, 6.0, 10.0),
+            num_feats=hidden_dim, sigmas=sigmas,
             hidden_dim=hidden_dim, num_blocks=num_blocks, act="silu", seed=0,
         )
     return m.to(device)
@@ -172,8 +195,28 @@ def _compute_epochs_for_steps(max_steps, n_data, batch_size):
     return max(1, max_steps // steps_per_epoch)
 
 
+def _eval_on_held_out(model, X_test, y_test, device, loss_fn, batch_size=8192):
+    """Compute loss on held-out test set via batched forward pass."""
+    model.eval()
+    Xt = torch.from_numpy(X_test).to(device)
+    yt = torch.from_numpy(y_test).unsqueeze(-1).to(device)
+    total_loss = 0.0
+    total_mse = 0.0
+    count = 0
+    with torch.no_grad():
+        for i in range(0, len(Xt), batch_size):
+            xb = Xt[i:i + batch_size]
+            yb = yt[i:i + batch_size]
+            pred = model(xb)
+            total_loss += loss_fn(pred, yb).item() * xb.size(0)
+            pred_clamped = pred.clamp(0, 1)
+            total_mse += ((pred_clamped - yb) ** 2).sum().item()
+            count += xb.size(0)
+    return total_loss / max(count, 1), total_mse / max(count, 1)
+
+
 def train_and_eval(config):
-    """Train a single model and evaluate on the fixed grid."""
+    """Train a single model and evaluate on held-out test data."""
     model_type = config["model_type"]
     hidden_dim = config["hidden_dim"]
     num_blocks = config["num_blocks"]
@@ -189,8 +232,9 @@ def train_and_eval(config):
     else:
         epochs = config.get("epochs", EPOCHS)
 
+    sigmas = tuple(config.get("sigmas", DEFAULT_SIGMAS))
     device = torch.device(device_str)
-    model = make_model(model_type, hidden_dim, num_blocks, device)
+    model = make_model(model_type, hidden_dim, num_blocks, device, sigmas=sigmas)
     n_params = count_params(model)
 
     Xsub, ysub = subsample_dataset(config["X"], config["y"], n_data)
@@ -224,19 +268,36 @@ def train_and_eval(config):
         train_losses.append(running / max(count, 1))
 
     wall_time = time.time() - t0
-    model.eval()
-    pred_logits = eval_on_grid(model, config["xs"], config["ys"], device,
-                               apply_sigmoid=False)
-    if target == "discrete":
-        pred_probs = 1.0 / (1.0 + np.exp(-np.clip(pred_logits, -20, 20)))
-        test_bce = float(F.binary_cross_entropy_with_logits(
-            torch.tensor(pred_logits.flatten()),
-            torch.tensor(config["gt"].flatten().astype(np.float32))).item())
-    else:
-        pred_probs = np.clip(pred_logits, 0, 1)
-        test_bce = None
 
-    test_mse = float(np.mean((pred_probs - config["gt"]) ** 2))
+    # Evaluate on held-out test set from same distribution
+    X_test = config.get("X_test")
+    y_test = config.get("y_test")
+    test_mse = None
+    test_bce = None
+
+    if X_test is not None and y_test is not None:
+        test_loss, test_mse = _eval_on_held_out(
+            model, X_test, y_test, device, loss_fn)
+        if target == "discrete":
+            test_bce = test_loss
+    elif "xs" in config and "ys" in config and "gt" in config:
+        model.eval()
+        pred_logits = eval_on_grid(model, config["xs"], config["ys"], device,
+                                   apply_sigmoid=False)
+        if target == "discrete":
+            pred_probs = 1.0 / (1.0 + np.exp(-np.clip(pred_logits, -20, 20)))
+            test_bce = float(F.binary_cross_entropy_with_logits(
+                torch.tensor(pred_logits.flatten()),
+                torch.tensor(config["gt"].flatten().astype(np.float32))).item())
+        else:
+            pred_probs = np.clip(pred_logits, 0, 1)
+        test_mse = float(np.mean((pred_probs - config["gt"]) ** 2))
+
+    # Save checkpoint
+    SCALING_CKPT_DIR.mkdir(parents=True, exist_ok=True)
+    ckpt_path = SCALING_CKPT_DIR / f"{tag}.pt"
+    torch.save(model.state_dict(), ckpt_path)
+
     flops = 6.0 * n_data * n_params * epochs
 
     result = {
@@ -267,8 +328,8 @@ def train_and_eval(config):
 # Worker infrastructure
 # ---------------------------------------------------------------------------
 
-def _load_datasets_for_targets(targets, n_total=2_000_000):
-    """Load master datasets and eval grids for the given set of targets."""
+def _load_datasets_for_targets(targets, n_total=2_000_000, test_frac=0.1):
+    """Load master datasets, split train/test, and optionally load eval grids."""
     from data import _master_smooth_path, _cache_path
     datasets = {}
     eval_grids = {}
@@ -276,24 +337,31 @@ def _load_datasets_for_targets(targets, n_total=2_000_000):
         smooth_path = _master_smooth_path(n_total)
         master_path = _cache_path(smooth_path, target)
         d = np.load(master_path)
-        datasets[target] = (d["X"], d["y"])
-        e = np.load(str(_eval_grid_cache_path(target)))
-        eval_grids[target] = (
-            e["xs"].astype(np.float64),
-            e["ys"].astype(np.float64),
-            e["gt"],
-        )
+        X, y = d["X"], d["y"]
+        split = int(len(X) * (1 - test_frac))
+        datasets[target] = (X[:split], y[:split], X[split:], y[split:])
+        cache = _eval_grid_cache_path(target)
+        if cache.exists():
+            e = np.load(str(cache))
+            eval_grids[target] = (
+                e["xs"].astype(np.float64),
+                e["ys"].astype(np.float64),
+                e["gt"],
+            )
     return datasets, eval_grids
 
 
-def run_on_device(configs, device_str, datasets, eval_grids):
+def run_on_device(configs, device_str, datasets, eval_grids=None):
     """Run a list of configs sequentially on one GPU."""
     results = []
     for c in configs:
         target = c.get("target", "smooth")
         c["device"] = device_str
-        c["X"], c["y"] = datasets[target]
-        c["xs"], c["ys"], c["gt"] = eval_grids[target]
+        X_train, y_train, X_test, y_test = datasets[target]
+        c["X"], c["y"] = X_train, y_train
+        c["X_test"], c["y_test"] = X_test, y_test
+        if eval_grids and target in eval_grids:
+            c["xs"], c["ys"], c["gt"] = eval_grids[target]
         results.append(train_and_eval(c))
     return results
 
@@ -316,7 +384,7 @@ def worker_main(configs_path, device_str, results_path):
     n_totals = {c.get("master_n_total", 2_000_000) for c in configs}
     n_total = max(n_totals)
     datasets, eval_grids = _load_datasets_for_targets(targets, n_total=n_total)
-    results = run_on_device(configs, device_str, datasets, eval_grids)
+    results = run_on_device(configs, device_str, datasets, eval_grids=eval_grids)
     with open(results_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Worker {device_str} done: {len(results)} results -> {results_path}")
@@ -326,29 +394,33 @@ def worker_main(configs_path, device_str, results_path):
 # Config builders
 # ---------------------------------------------------------------------------
 
-def build_data_scaling_configs(model_types=("fourier",), target="smooth"):
+def build_data_scaling_configs(model_types=("fourier",), target="smooth",
+                               sigmas=DEFAULT_SIGMAS):
     configs = []
     for n in DATA_SIZES:
         for mt in model_types:
             configs.append({
                 "model_type": mt, "hidden_dim": 512, "num_blocks": 20,
                 "n_data": n, "target": target, "axis": "data",
+                "sigmas": list(sigmas),
             })
     return configs
 
 
-def build_model_scaling_configs(model_types=("fourier",), target="smooth"):
+def build_model_scaling_configs(model_types=("fourier",), target="smooth",
+                                sigmas=DEFAULT_SIGMAS):
     configs = []
     for mc in MODEL_CONFIGS:
         for mt in model_types:
             configs.append({
                 "model_type": mt, "n_data": 1_000_000,
-                "target": target, "axis": "model", **mc,
+                "target": target, "axis": "model",
+                "sigmas": list(sigmas), **mc,
             })
     return configs
 
 
-def build_targeted_configs(target="smooth"):
+def build_targeted_configs(target="smooth", sigmas=DEFAULT_SIGMAS):
     """Parameter scaling at N=5M with fixed gradient-step budget."""
     configs = []
     for mc in TARGETED_MODEL_CONFIGS:
@@ -359,12 +431,13 @@ def build_targeted_configs(target="smooth"):
             "axis": "targeted",
             "max_steps": MAX_STEPS,
             "master_n_total": MASTER_N_TOTAL,
+            "sigmas": list(sigmas),
             **mc,
         })
     return configs
 
 
-def build_isodata_configs(target="smooth"):
+def build_isodata_configs(target="smooth", sigmas=DEFAULT_SIGMAS):
     """Parameter scaling at multiple N values with the 8 evenly-spaced model configs."""
     configs = []
     for n_data in ISODATA_N_VALUES:
@@ -376,6 +449,25 @@ def build_isodata_configs(target="smooth"):
                 "axis": "isodata",
                 "max_steps": MAX_STEPS,
                 "master_n_total": MASTER_N_TOTAL,
+                "sigmas": list(sigmas),
+                **mc,
+            })
+    return configs
+
+
+def build_sweep_configs(target="smooth", sigmas=DEFAULT_SIGMAS):
+    """Unified parameter scaling: 10 model sizes x 4 N values."""
+    configs = []
+    for n_data in SWEEP_N_VALUES:
+        for mc in SWEEP_MODEL_CONFIGS:
+            configs.append({
+                "model_type": "fourier",
+                "n_data": n_data,
+                "target": target,
+                "axis": "sweep",
+                "max_steps": MAX_STEPS,
+                "master_n_total": MASTER_N_TOTAL,
+                "sigmas": list(sigmas),
                 **mc,
             })
     return configs
@@ -497,13 +589,14 @@ def _get_loss(r, target):
     return r["test_mse"]
 
 
-def plot_data_scaling(results, target="smooth"):
+def plot_data_scaling(results, target="smooth", hf=False, test_label=""):
     """Data scaling: loss vs N for the big model (h=512).
 
-    Combines original data-scaling runs and the targeted N=5M run.
+    Combines original data-scaling runs and the targeted/sweep N=5M run.
     Uses test_mse for consistency (available for all runs).
     """
-    suffix = "_discrete" if target == "discrete" else ""
+    hf_tag = "_hf" if hf else ""
+    suffix = ("_discrete" if target == "discrete" else "") + hf_tag + test_label
     pts = sorted(
         [r for r in results if r["model_type"] == "fourier"
          and r["hidden_dim"] == 512 and r["num_blocks"] == 20],
@@ -529,15 +622,13 @@ def plot_data_scaling(results, target="smooth"):
     )
 
 
-def plot_model_scaling(results, target="smooth"):
-    """Parameter scaling: family of L(P) curves at different N values.
-
-    Shows one curve per dataset size, filtered to the 8 ISODATA model configs,
-    plus a Pareto frontier (min loss at each P across all N).
-    """
-    suffix = "_discrete" if target == "discrete" else ""
+def plot_model_scaling(results, target="smooth", hf=False, test_label=""):
+    """Parameter scaling: family of L(P) curves at different N values."""
+    hf_tag = "_hf" if hf else ""
+    suffix = ("_discrete" if target == "discrete" else "") + hf_tag + test_label
+    all_hidden_dims = SWEEP_HIDDEN_DIMS | ISODATA_HIDDEN_DIMS
     fourier = [r for r in results if r["model_type"] == "fourier"
-               and r.get("hidden_dim") in ISODATA_HIDDEN_DIMS]
+               and r.get("hidden_dim") in all_hidden_dims]
     if not fourier:
         print("  [skip] No fourier model-scaling results.")
         return
@@ -595,9 +686,10 @@ def _pareto_frontier(x, y):
     return np.array(front_x), np.array(front_y)
 
 
-def plot_compute_scaling(all_results, target="smooth"):
+def plot_compute_scaling(all_results, target="smooth", hf=False, test_label=""):
     """Compute scaling: scatter all runs, highlight Pareto frontier."""
-    suffix = "_discrete" if target == "discrete" else ""
+    hf_tag = "_hf" if hf else ""
+    suffix = ("_discrete" if target == "discrete" else "") + hf_tag + test_label
     pts = [r for r in all_results if r["model_type"] == "fourier"]
     if not pts:
         print("  [skip] No fourier results for compute scaling.")
@@ -610,7 +702,8 @@ def plot_compute_scaling(all_results, target="smooth"):
     y_all = np.array([_get_loss(r, target) for r in pts], dtype=np.float64)
 
     axes = [r.get("axis", "unknown") for r in pts]
-    colors = {"data": "#7FBFFF", "model": "#FFB07F", "targeted": "#7FDF7F", "unknown": "#CCCCCC"}
+    colors = {"data": "#7FBFFF", "model": "#FFB07F", "targeted": "#7FDF7F",
+              "isodata": "#7FDF7F", "sweep": "#7FDF7F", "unknown": "#CCCCCC"}
     for ax_type in sorted(set(axes)):
         mask = np.array([a == ax_type for a in axes])
         ax.scatter(x_all[mask], y_all[mask], s=30, alpha=0.6,
@@ -644,8 +737,8 @@ def plot_compute_scaling(all_results, target="smooth"):
     print(f"  Saved {filename}")
 
 
-def generate_all_plots(target="smooth"):
-    rpath = _results_path(target)
+def generate_all_plots(target="smooth", hf=False, test_label=""):
+    rpath = _results_path(target, hf=hf, test_label=test_label)
     if not rpath.exists():
         print(f"No results file at {rpath}")
         return
@@ -654,18 +747,21 @@ def generate_all_plots(target="smooth"):
 
     all_fourier = [r for r in all_results if r["model_type"] == "fourier"]
     data_and_targeted = [r for r in all_fourier
-                         if r.get("axis") in ("data", "targeted")]
+                         if r.get("axis") in ("data", "targeted", "sweep")]
     model_results = [r for r in all_fourier
-                     if r.get("axis") in ("model", "targeted", "isodata")]
+                     if r.get("axis") in ("model", "targeted", "isodata", "sweep")]
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Generating plots (target={target}) ...")
+    print(f"Generating plots (target={target}, hf={hf}, test_label={test_label!r}) ...")
     if data_and_targeted:
-        plot_data_scaling(data_and_targeted, target=target)
+        plot_data_scaling(data_and_targeted, target=target, hf=hf,
+                          test_label=test_label)
     if model_results:
-        plot_model_scaling(model_results, target=target)
+        plot_model_scaling(model_results, target=target, hf=hf,
+                           test_label=test_label)
     if all_fourier:
-        plot_compute_scaling(all_fourier, target=target)
+        plot_compute_scaling(all_fourier, target=target, hf=hf,
+                             test_label=test_label)
 
 
 # ---------------------------------------------------------------------------
@@ -694,6 +790,12 @@ def main():
                         help="Run targeted param scaling at N=5M for both targets")
     parser.add_argument("--run-isodata", action="store_true",
                         help="Run isodata param scaling at N=100K,500K,1M for both targets")
+    parser.add_argument("--hf", action="store_true",
+                        help="Use high-frequency Fourier sigmas (2,6,10,30,100)")
+    parser.add_argument("--sweep", action="store_true",
+                        help="Unified param sweep: 10 models x 4 N values x 2 targets")
+    parser.add_argument("--test-label", type=str, default="",
+                        help="Suffix for output filenames (e.g. _3070test)")
     parser.add_argument("--sanity", action="store_true")
     # Hidden worker args
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
@@ -710,8 +812,11 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.plot_only:
-        generate_all_plots(target=args.target)
+        generate_all_plots(target=args.target, hf=args.hf,
+                           test_label=args.test_label)
         return
+
+    sigmas = HF_SIGMAS if args.hf else DEFAULT_SIGMAS
 
     model_types = {
         "fourier": ("fourier",),
@@ -720,24 +825,26 @@ def main():
     }[args.model_type]
 
     # ------------------------------------------------------------------
-    # --run-targeted: param scaling at N=5M with fixed gradient steps
+    # --sweep: unified param sweep (10 models x 4 N x 2 targets)
     # ------------------------------------------------------------------
-    if args.run_targeted:
+    if args.sweep:
         _ensure_datasets("smooth", "discrete", n_total=MASTER_N_TOTAL)
 
         all_configs = []
-        all_configs.extend(build_targeted_configs(target="smooth"))
-        all_configs.extend(build_targeted_configs(target="discrete"))
+        all_configs.extend(build_sweep_configs(target="smooth", sigmas=sigmas))
+        all_configs.extend(build_sweep_configs(target="discrete", sigmas=sigmas))
 
+        hf_label = " (HF)" if args.hf else ""
         print(f"\n{'='*60}")
-        print(f"  Targeted run: {len(all_configs)} configs on {args.num_gpus} GPUs")
-        print(f"  N={TARGETED_N_DATA:,}, max_steps={MAX_STEPS:,}")
+        print(f"  Sweep{hf_label}: {len(all_configs)} configs on {args.num_gpus} GPUs")
+        print(f"  N values: {SWEEP_N_VALUES}, max_steps={MAX_STEPS:,}")
         print(f"{'='*60}")
 
-        results = launch_workers(all_configs, args.num_gpus, run_tag="targeted")
+        results = launch_workers(all_configs, args.num_gpus, run_tag="sweep")
 
         for target in ("smooth", "discrete"):
-            rpath = _results_path(target)
+            rpath = _results_path(target, hf=args.hf,
+                                  test_label=args.test_label)
             existing = []
             if rpath.exists():
                 with open(rpath) as f:
@@ -751,8 +858,48 @@ def main():
             print(f"Saved {len(deduped)} new results to {rpath} "
                   f"({len(merged)} total)")
 
-        generate_all_plots(target="smooth")
-        generate_all_plots(target="discrete")
+        generate_all_plots(target="smooth", hf=args.hf,
+                           test_label=args.test_label)
+        generate_all_plots(target="discrete", hf=args.hf,
+                           test_label=args.test_label)
+        print("\nDone.")
+        return
+
+    # ------------------------------------------------------------------
+    # --run-targeted: param scaling at N=5M with fixed gradient steps
+    # ------------------------------------------------------------------
+    if args.run_targeted:
+        _ensure_datasets("smooth", "discrete", n_total=MASTER_N_TOTAL)
+
+        all_configs = []
+        all_configs.extend(build_targeted_configs(target="smooth", sigmas=sigmas))
+        all_configs.extend(build_targeted_configs(target="discrete", sigmas=sigmas))
+
+        hf_label = " (HF)" if args.hf else ""
+        print(f"\n{'='*60}")
+        print(f"  Targeted run{hf_label}: {len(all_configs)} configs on {args.num_gpus} GPUs")
+        print(f"  N={TARGETED_N_DATA:,}, max_steps={MAX_STEPS:,}")
+        print(f"{'='*60}")
+
+        results = launch_workers(all_configs, args.num_gpus, run_tag="targeted")
+
+        for target in ("smooth", "discrete"):
+            rpath = _results_path(target, hf=args.hf)
+            existing = []
+            if rpath.exists():
+                with open(rpath) as f:
+                    existing = json.load(f)
+            new = [r for r in results if r.get("target") == target]
+            existing_tags = {r["tag"] for r in existing}
+            deduped = [r for r in new if r["tag"] not in existing_tags]
+            merged = existing + deduped
+            with open(rpath, "w") as f:
+                json.dump(merged, f, indent=2)
+            print(f"Saved {len(deduped)} new results to {rpath} "
+                  f"({len(merged)} total)")
+
+        generate_all_plots(target="smooth", hf=args.hf)
+        generate_all_plots(target="discrete", hf=args.hf)
         print("\nDone.")
         return
 
@@ -763,18 +910,19 @@ def main():
         _ensure_datasets("smooth", "discrete", n_total=MASTER_N_TOTAL)
 
         all_configs = []
-        all_configs.extend(build_isodata_configs(target="smooth"))
-        all_configs.extend(build_isodata_configs(target="discrete"))
+        all_configs.extend(build_isodata_configs(target="smooth", sigmas=sigmas))
+        all_configs.extend(build_isodata_configs(target="discrete", sigmas=sigmas))
 
+        hf_label = " (HF)" if args.hf else ""
         print(f"\n{'='*60}")
-        print(f"  Isodata run: {len(all_configs)} configs on {args.num_gpus} GPUs")
+        print(f"  Isodata run{hf_label}: {len(all_configs)} configs on {args.num_gpus} GPUs")
         print(f"  N values: {ISODATA_N_VALUES}, max_steps={MAX_STEPS:,}")
         print(f"{'='*60}")
 
         results = launch_workers(all_configs, args.num_gpus, run_tag="isodata")
 
         for target in ("smooth", "discrete"):
-            rpath = _results_path(target)
+            rpath = _results_path(target, hf=args.hf)
             existing = []
             if rpath.exists():
                 with open(rpath) as f:
@@ -788,8 +936,8 @@ def main():
             print(f"Saved {len(deduped)} new results to {rpath} "
                   f"({len(merged)} total)")
 
-        generate_all_plots(target="smooth")
-        generate_all_plots(target="discrete")
+        generate_all_plots(target="smooth", hf=args.hf)
+        generate_all_plots(target="discrete", hf=args.hf)
         print("\nDone.")
         return
 

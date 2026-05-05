@@ -1,0 +1,1 @@
+[{"model_type": "fourier", "n_data": 1000000, "target": "smooth", "axis": "model", "hidden_dim": 1024, "num_blocks": 20}]

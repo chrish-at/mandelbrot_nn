@@ -1,0 +1,15 @@
+[
+  {
+    "tag": "fourier_h64_b4_n5000",
+    "model_type": "fourier",
+    "hidden_dim": 64,
+    "num_blocks": 4,
+    "n_params": 42753,
+    "n_data": 5000,
+    "epochs": 3,
+    "train_loss_final": 0.25384071469306946,
+    "test_mse": 0.21656683087348938,
+    "flops": 3847770000.0,
+    "wall_time_s": 0.4093015193939209
+  }
+]

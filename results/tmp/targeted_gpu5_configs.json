@@ -1,0 +1,1 @@
+[{"model_type": "fourier", "n_data": 5000000, "target": "discrete", "axis": "targeted", "max_steps": 25000, "master_n_total": 10000000, "hidden_dim": 320, "num_blocks": 14}]

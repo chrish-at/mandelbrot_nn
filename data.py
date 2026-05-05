@@ -157,6 +157,7 @@ def build_boundary_biased_dataset(
     n_total: int = 1_000_000,
     frac_boundary: float = 0.7,
     xlim=DEFAULT_XLIM,
+    ylim=None,
     resolution=DEFAULT_RES,
     ycenter: float = 0.0,
     max_iter: int = DEFAULT_MAX_ITER,
@@ -165,7 +166,8 @@ def build_boundary_biased_dataset(
     pool_chunk_size: int = 10_000_000,
 ):
     rng = np.random.default_rng(seed)
-    ylim = compute_ylim(xlim, resolution, ycenter=ycenter)
+    if ylim is None:
+        ylim = compute_ylim(xlim, resolution, ycenter=ycenter)
 
     n_boundary = int(n_total * frac_boundary)
     n_uniform = n_total - n_boundary
@@ -211,6 +213,74 @@ def build_boundary_biased_dataset(
 
     perm = rng.permutation(X.shape[0])
     return X[perm], y[perm], ylim
+
+
+def build_stratified_dataset(
+    n_total: int = 1_000_000,
+    n_bins: int = 20,
+    xlim=DEFAULT_XLIM,
+    ylim=None,
+    resolution=DEFAULT_RES,
+    ycenter: float = 0.0,
+    max_iter: int = DEFAULT_MAX_ITER,
+    seed: int = 0,
+    pool_factor: int = 20,
+    test_frac: float = 0.1,
+):
+    """Stratified sampling: equal number of points per escape-time bin.
+
+    Returns (X_train, y_train, X_test, y_test, ylim).
+    """
+    rng = np.random.default_rng(seed)
+    if ylim is None:
+        ylim = compute_ylim(xlim, resolution, ycenter=ycenter)
+
+    n_pool = n_total * pool_factor
+    print(f"  Sampling pool of {n_pool:,} points ...")
+    pool = sample_uniform(n_pool, xlim, ylim, rng)
+    print(f"  Computing escape times ...")
+    yp = smooth_escape_batch(pool, max_iter=max_iter)
+
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    per_bin = n_total // n_bins
+    parts_X, parts_y = [], []
+    for i in range(n_bins):
+        lo, hi = bin_edges[i], bin_edges[i + 1]
+        mask = (yp >= lo) & (yp <= hi if i == n_bins - 1 else yp < hi)
+        cand_X, cand_y = pool[mask], yp[mask]
+        if len(cand_X) > per_bin:
+            idx = rng.choice(len(cand_X), per_bin, replace=False)
+            cand_X, cand_y = cand_X[idx], cand_y[idx]
+        parts_X.append(cand_X)
+        parts_y.append(cand_y)
+        print(f"    bin [{lo:.2f}, {hi:.2f}]: {mask.sum():>8,} pool -> {len(cand_X):>6,} kept")
+
+    X = np.concatenate(parts_X, axis=0).astype(np.float32)
+    y = np.concatenate(parts_y, axis=0).astype(np.float32)
+    perm = rng.permutation(len(X))
+    X, y = X[perm], y[perm]
+
+    n_test = int(len(X) * test_frac)
+    X_train, y_train = X[n_test:], y[n_test:]
+    X_test, y_test = X[:n_test], y[:n_test]
+    print(f"  Total: {len(X):,}  train={len(X_train):,}  test={len(X_test):,}")
+    return X_train, y_train, X_test, y_test, ylim
+
+
+def get_or_build_stratified(cache_path: str = "data/dataset_stratified.npz",
+                            **kwargs):
+    cache = Path(cache_path)
+    if cache.exists():
+        print(f"Loading cached stratified dataset from {cache}")
+        d = np.load(cache)
+        return d["X_train"], d["y_train"], d["X_test"], d["y_test"], tuple(d["ylim"])
+    print("Building stratified dataset ...")
+    X_train, y_train, X_test, y_test, ylim = build_stratified_dataset(**kwargs)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(cache, X_train=X_train, y_train=y_train,
+             X_test=X_test, y_test=y_test, ylim=np.array(ylim))
+    print(f"Stratified dataset saved to {cache}")
+    return X_train, y_train, X_test, y_test, ylim
 
 
 def _cache_path(base: str, target: str) -> str:

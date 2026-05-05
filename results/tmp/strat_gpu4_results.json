@@ -1,0 +1,13 @@
+[
+  {
+    "tag": "fourier_h192_b10_n5000000",
+    "hidden_dim": 192,
+    "num_blocks": 10,
+    "n_params": 823297,
+    "n_data": 5000000,
+    "epochs": 20,
+    "train_loss": 0.0023222706690664936,
+    "test_loss": 0.0023963896092027426,
+    "wall_time_s": 976.9103934764862
+  }
+]

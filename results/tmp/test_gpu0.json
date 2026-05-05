@@ -1,0 +1,1 @@
+[{"model_type": "fourier", "hidden_dim": 64, "num_blocks": 4, "n_data": 5000, "epochs": 3}]
